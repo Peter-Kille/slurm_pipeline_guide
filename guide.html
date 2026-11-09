@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slurm Pipeline Guide</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1f2328; --muted:#5b636e; --line:#c4cad2; --surf:#f4f6f8; --code:#f1f3f5;
+  --blue-f:#dbe9fb; --blue-s:#2f6db5; --teal-f:#d5f0e8; --teal-s:#1e8a6a;
+  --amber-f:#fbebc8; --amber-s:#a9710f; --coral-f:#fadbd2; --coral-s:#b4492f;
+  --purple-f:#e6e0f7; --purple-s:#6a4fb0; --accent:#2f6db5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171a; --fg:#e6e8ea; --muted:#9aa3ad; --line:#3b434c; --surf:#1e2328; --code:#1b1f24;
+    --blue-f:#1d3350; --blue-s:#6fa8ee; --teal-f:#14392f; --teal-s:#4fc9a2;
+    --amber-f:#3d2f10; --amber-s:#e3b04d; --coral-f:#40201a; --coral-s:#f08a70;
+    --purple-f:#2a2347; --purple-s:#a995ea; --accent:#6fa8ee;
+  }
+}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0}
+main{max-width:860px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:2rem;margin:.2em 0}
+h2{font-size:1.4rem;margin:2.2em 0 .4em;padding-top:.6em;border-top:1px solid var(--line)}
+h3{font-size:1.1rem;margin:1.6em 0 .3em}
+p.lead{color:var(--muted);font-size:1.05rem}
+a{color:var(--accent)}
+code{background:var(--code);padding:.1em .35em;border-radius:4px;font:0.9em ui-monospace,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;font-size:.85rem}
+.note,.warn{border-left:4px solid var(--blue-s);background:var(--blue-f);padding:8px 14px;border-radius:4px;margin:1em 0}
+.warn{border-color:var(--coral-s);background:var(--coral-f)}
+figure{margin:1.2em 0}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:.9rem;margin-top:4px}
+table{border-collapse:collapse;width:100%;font-size:.93rem;margin:1em 0}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--surf)}
+nav ol{columns:2;column-gap:32px;padding-left:1.2em}
+@media (max-width:600px){nav ol{columns:1}}
+/* svg */
+.bx{fill:var(--surf);stroke:var(--line);stroke-width:1.2}
+.b{fill:var(--blue-f);stroke:var(--blue-s);stroke-width:1.2}
+.t{fill:var(--teal-f);stroke:var(--teal-s);stroke-width:1.2}
+.a{fill:var(--amber-f);stroke:var(--amber-s);stroke-width:1.2}
+.c{fill:var(--coral-f);stroke:var(--coral-s);stroke-width:1.2}
+.p{fill:var(--purple-f);stroke:var(--purple-s);stroke-width:1.2}
+.dash{stroke-dasharray:5 4}
+.tx{fill:var(--fg);font:13px system-ui,sans-serif}
+.tb{fill:var(--fg);font:600 13px system-ui,sans-serif}
+.tm{fill:var(--muted);font:12px system-ui,sans-serif}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.ar{stroke:var(--muted);stroke-width:1.5;fill:none;marker-end:url(#arr)}
+.ln{stroke:var(--muted);stroke-width:1.2;fill:none}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1L9 5L1 9" fill="none" style="stroke:var(--muted)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+</svg>
+<main>
+
+<h1>Building a Slurm pipeline that is easy to run, resume and read</h1>
+<p class="lead">A guide to the pattern used in the metagenomic Slurm pipeline: a small bash framework of config files, module scripts and a driver job. It shows what each part does, why it is built that way, and the bash and Slurm features it relies on.</p>
+
+<nav>
+<strong>Contents</strong>
+<ol>
+  <li><a href="#big-picture">The big picture</a></li>
+  <li><a href="#layout">Repository layout</a></li>
+  <li><a href="#config">The config layer: options and variables</a></li>
+  <li><a href="#env">How variables reach the jobs</a></li>
+  <li><a href="#module">Anatomy of a module script</a></li>
+  <li><a href="#arrays">Array jobs: one task per sample</a></li>
+  <li><a href="#driver">The driver job</a></li>
+  <li><a href="#run">The run() function and done markers</a></li>
+  <li><a href="#parallel">Running stages in parallel, then gating</a></li>
+  <li><a href="#db">Shared databases: link, don't copy</a></li>
+  <li><a href="#log">Recording the command line</a></li>
+  <li><a href="#monitor">Monitoring, cancelling, resuming</a></li>
+  <li><a href="#pitfalls">Pitfalls checklist</a></li>
+  <li><a href="#template">Starter skeleton</a></li>
+</ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="big-picture">1. The big picture</h2>
+<p>The pipeline has three layers, each doing one job:</p>
+<ul>
+  <li><strong>config/</strong> reads the command-line options, sets defaults, creates folders and exports variables.</li>
+  <li><strong>modules/</strong> holds one script per analysis stage. A module knows only how to do its own step.</li>
+  <li><strong>deploy.sh</strong> sources the config, then runs the modules in order, one stage at a time.</li>
+</ul>
+<p>When you run <code>./deploy.sh</code> it does not run the pipeline itself. It validates your options, then submits <em>itself</em> as a small Slurm job (the <em>driver</em>). The driver submits each stage, waits for it, and only then moves on, so nothing has to stay alive on the login node.</p>
+
+<figure>
+<svg viewBox="0 0 680 470" role="img" aria-label="Launcher hands over to a driver job which submits stages one at a time">
+  <!-- login node -->
+  <rect class="b" x="20" y="20" width="190" height="96" rx="8"/>
+  <text class="tb" x="36" y="44">Login node</text>
+  <text class="mono tx" x="36" y="64">./deploy.sh -n run1 \</text>
+  <text class="mono tx" x="36" y="80">  -p epyc_bigram</text>
+  <text class="tm" x="36" y="102">validates options, then exits</text>
+  <!-- driver -->
+  <rect class="t" x="262" y="20" width="200" height="96" rx="8"/>
+  <text class="tb" x="278" y="44">Driver job (Slurm)</text>
+  <text class="tx" x="278" y="64">1 CPU, 1 GB, up to 7 days</text>
+  <text class="tm" x="278" y="84">runs deploy.sh again with</text>
+  <text class="mono tm" x="278" y="100">PIPELINE_DRIVER=1</text>
+  <path class="ar" d="M210 68 H260"/>
+  <text class="mono tm" x="214" y="58">sbatch</text>
+  <!-- config -->
+  <rect class="p dash" x="504" y="20" width="156" height="96" rx="8"/>
+  <text class="tb" x="520" y="44">config/ + modules/</text>
+  <text class="tm" x="520" y="64">sourced by both the</text>
+  <text class="tm" x="520" y="80">launcher and the driver</text>
+  <path class="ln dash" d="M504 68 H464"/>
+  <!-- stages -->
+  <path class="ar" d="M362 116 V146"/>
+  <rect class="bx" x="262" y="148" width="200" height="34" rx="6"/>
+  <text class="tx" x="278" y="170">1-rename</text>
+  <path class="ar" d="M362 182 V200"/>
+  <rect class="a" x="262" y="202" width="200" height="54" rx="6"/>
+  <text class="tx" x="278" y="222">2A→2B→2C   |   3A   |   5A</text>
+  <text class="tm" x="278" y="240">QC and database set-up, in parallel</text>
+  <path class="ar" d="M362 256 V274"/>
+  <rect class="bx" x="262" y="276" width="200" height="34" rx="6"/>
+  <text class="tx" x="278" y="298">3B → 3C → 3D   Kraken2</text>
+  <path class="ar" d="M362 310 V326"/>
+  <rect class="bx" x="262" y="328" width="200" height="34" rx="6"/>
+  <text class="tx" x="278" y="350">4A → 4B   Bracken</text>
+  <path class="ar" d="M362 362 V378"/>
+  <rect class="bx" x="262" y="380" width="200" height="34" rx="6"/>
+  <text class="tx" x="278" y="402">5B → 5C → 5D   MetaPhlAn</text>
+  <path class="ar" d="M362 414 V430"/>
+  <rect class="bx" x="262" y="432" width="200" height="30" rx="6"/>
+  <text class="tx" x="278" y="452">6A–6D Krona, X MultiQC</text>
+  <!-- annotations -->
+  <path class="ln" d="M244 150 V460"/>
+  <text class="tm" x="20" y="172">Each box is one</text>
+  <text class="mono tm" x="20" y="188">sbatch --wait</text>
+  <text class="tm" x="20" y="212">The driver blocks until</text>
+  <text class="tm" x="20" y="228">the stage ends, then</text>
+  <text class="tm" x="20" y="244">moves to the next.</text>
+  <text class="tm" x="20" y="290">Only one stage (plus the</text>
+  <text class="tm" x="20" y="306">driver) sits in the queue.</text>
+  <text class="tm" x="486" y="172">On success a marker</text>
+  <text class="mono tm" x="486" y="188">.done_&lt;stage&gt;</text>
+  <text class="tm" x="486" y="204">is written; on a rerun</text>
+  <text class="tm" x="486" y="220">finished stages are skipped.</text>
+</svg>
+<figcaption>Figure 1. Launcher, driver job and stages.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="layout">2. Repository layout</h2>
+<pre><code>metagenomic_slurm/
+├── deploy.sh              # launcher + driver: defines run(), lists the stages in order
+├── config/
+│   ├── arguments          # getopt options, defaults, validation, exports
+│   ├── folders            # creates directories, exports their paths, logs the command
+│   └── programs           # module names (e.g. metaphlan_module), checked on the login node
+├── modules/
+│   ├── 1-rename.sh        # one script per stage; array stages end in _array.sh
+│   ├── 2A-fastqc_array.sh
+│   ├── ...
+│   └── scripts/           # helper scripts (python, R) called by modules
+├── README.md
+└── work/ outdir/ raw_data/   # created at run time</code></pre>
+<p>The naming convention matters: the file name without <code>.sh</code> becomes the stage's label for logs and done markers (<code>.done_2B-fastp_array</code>). Prefixes such as <code>2A</code>, <code>2B</code> make the run order obvious in a directory listing.</p>
+
+<!-- ============================================================ -->
+<h2 id="config">3. The config layer: options and variables</h2>
+<p><code>config/arguments</code> does four things: capture the command line, set defaults, parse options with <code>getopt</code>, then validate and export.</p>
+
+<h3>3.1 Capturing the command line</h3>
+<pre><code>CMDLINE="$(printf '%q ' "$0" "$@")"
+export CMDLINE</code></pre>
+<p><code>"$0"</code> is the script name and <code>"$@"</code> is every argument. <code>printf '%q'</code> quotes each one so the string can be replayed exactly, including arguments with spaces. This must come <em>before</em> <code>getopt</code>, because parsing rewrites the positional parameters. The driver uses it to re-run the same command (section 7).</p>
+
+<h3>3.2 Defaults first, then override</h3>
+<pre><code>krakendb="k2_standard_08gb_20250402"
+conf_levels="0.0 0.1 0.2 0.5"
+driver_part="epyc_long"
+foreground="no"</code></pre>
+<p>Set a sensible default for every optional setting at the top. Options then override only what the user supplies.</p>
+
+<h3>3.3 Parsing with getopt</h3>
+<pre><code>PARSED=$(getopt -o n:p:w:k:m:c:g:D:T:Fh \
+        --long name:,partition:,work:,krakendb:,metaphlandb:,confidence:,hitgroups:,driver-partition:,driver-time:,foreground,help \
+        -- "$@")
+eval set -- "$PARSED"
+
+while true; do
+  case "$1" in
+    -n|--name)      NAME="$2"; shift 2 ;;
+    -c|--confidence) conf_levels="$2"; shift 2 ;;
+    -F|--foreground) foreground="yes"; shift ;;
+    --) shift; break ;;
+  esac
+done</code></pre>
+<ul>
+  <li>A letter followed by <code>:</code> takes a value (<code>n:</code>); a bare letter is a switch (<code>F</code>).</li>
+  <li><code>getopt</code> normalises the arguments, <code>eval set --</code> loads them back, and the <code>case</code> loop reads them two at a time (<code>shift 2</code> for option plus value, <code>shift</code> for a switch).</li>
+</ul>
+
+<h3>3.4 Validate early, on the login node</h3>
+<p>Check required options, allowed partitions and numeric ranges before anything is submitted. A typo caught now costs nothing; caught after a three-hour job it costs a lot.</p>
+<pre><code>VALID_PART=("epyc" "epyc_long" "epyc_bigram" "epyc_bigram -w c1-11")
+validate_partition() {
+  for valid in "${VALID_PART[@]}"; do
+    [[ "$1" == "$valid" ]] &amp;&amp; return 0
+  done
+  return 1
+}
+
+for c in ${conf_levels}; do
+  [[ "$c" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]] || { echo "Error: bad --confidence '$c'"; exit 1; }
+done</code></pre>
+<div class="note">Pinning a node works because the partition string is passed straight to <code>sbatch</code>: <code>--partition=${PART}</code> expands to <code>--partition=epyc_bigram -w c1-11</code>, and <code>-w</code> is Slurm's node-list flag. Keep such strings on the allow-list so users can't pass arbitrary text.</div>
+
+<h3>3.5 config/folders</h3>
+<p><code>config/folders</code> builds every directory path once, creates it if missing, and exports it, so no module ever constructs a path by hand:</p>
+<pre><code>krakendir="${workdir}/3-kraken"
+mkdir -p "${krakendir}"
+export krakendir</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="env">4. How variables reach the jobs</h2>
+<p>This is the part that most often goes wrong. A module runs in a <em>different process</em>, usually on a different node, from the script that submitted it. It only knows a variable if that variable was <strong>exported</strong> in the submitting shell. <code>sbatch</code> copies the submitting shell's environment into the job by default (<code>--export=ALL</code>).</p>
+
+<figure>
+<svg viewBox="0 0 680 336" role="img" aria-label="How exported variables flow from config to modules, and how the driver re-sources config">
+  <rect class="p" x="14" y="24" width="140" height="70" rx="8"/>
+  <text class="tb" x="26" y="48">config/*</text>
+  <text class="tm" x="26" y="66">set + export</text>
+  <text class="mono tm" x="26" y="82">export rawdir</text>
+  <path class="ar" d="M154 59 H184"/>
+  <rect class="b" x="186" y="24" width="150" height="70" rx="8"/>
+  <text class="tb" x="198" y="48">deploy.sh shell</text>
+  <text class="tm" x="198" y="66">variables sit in its</text>
+  <text class="tm" x="198" y="82">environment</text>
+  <path class="ar" d="M336 59 H366"/>
+  <rect class="a" x="368" y="24" width="150" height="70" rx="8"/>
+  <text class="tb" x="380" y="48">sbatch</text>
+  <text class="tm" x="380" y="66">copies the environment</text>
+  <text class="mono tm" x="380" y="82">--export=ALL (default)</text>
+  <path class="ar" d="M518 59 H548"/>
+  <rect class="t" x="550" y="24" width="116" height="70" rx="8"/>
+  <text class="tb" x="562" y="48">module job</text>
+  <text class="tm" x="562" y="66">sees ${rawdir}</text>
+  <text class="tm" x="562" y="82">on any node</text>
+
+  <text class="tb" x="14" y="140">The driver adds one hop</text>
+  <rect class="b" x="14" y="154" width="150" height="62" rx="8"/>
+  <text class="tb" x="26" y="178">Launcher</text>
+  <text class="tm" x="26" y="196">sbatch --wrap "bash $CMDLINE"</text>
+  <path class="ar" d="M164 185 H194"/>
+  <rect class="t" x="196" y="154" width="190" height="62" rx="8"/>
+  <text class="tb" x="208" y="178">Driver job</text>
+  <text class="tm" x="208" y="196">new, empty shell: sources config</text>
+  <text class="tm" x="208" y="210">again from the same command</text>
+  <path class="ar" d="M386 185 H416"/>
+  <rect class="a" x="418" y="154" width="130" height="62" rx="8"/>
+  <text class="tb" x="430" y="178">sbatch</text>
+  <text class="tm" x="430" y="196">stage jobs inherit</text>
+  <text class="tm" x="430" y="210">the driver's exports</text>
+  <path class="ar" d="M548 185 H578"/>
+  <rect class="t" x="580" y="154" width="86" height="62" rx="8"/>
+  <text class="tb" x="592" y="178">Module</text>
+  <text class="tm" x="592" y="196">same vars</text>
+
+  <rect class="c dash" x="14" y="240" width="652" height="82" rx="8"/>
+  <text class="tb" x="28" y="262">Rules that follow</text>
+  <text class="tm" x="28" y="280">1. Export anything a module needs.</text>
+  <text class="tm" x="28" y="296">2. A module cannot change the submitter's variables; pass results through files.</text>
+  <text class="tm" x="28" y="312">3. Config is re-run on a compute node by the driver, so it must work there.</text>
+</svg>
+<figcaption>Figure 2. Exports travel from config, through sbatch, into every module.</figcaption>
+</figure>
+
+<h3>Two details that bite</h3>
+<ul>
+  <li><strong>Memory variables.</strong> A job started with <code>--mem=1G</code> has <code>SLURM_MEM_PER_NODE</code> set in its environment. Any <code>sbatch</code> it launches inherits that and can conflict with a child's <code>--mem-per-cpu</code>. The driver therefore starts with <code>unset SLURM_MEM_PER_NODE SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU</code>.</li>
+  <li><strong>Modules.</strong> <code>module load</code> only affects the current shell. Each module script loads what it needs itself (<code>module load ${metaphlan_module}</code>).</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="module">5. Anatomy of a module script</h2>
+<pre><code>#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128000          # megabytes
+
+echo "hostname=$(hostname)"
+echo "SLURM_JOB_ID=${SLURM_JOB_ID}"
+cat $0                         # print this script into the job log
+
+module load ${metaphlan_module}
+
+file=$(ls "${rawdir}"/*_1.fastq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p)
+R1=$(basename $file | cut -f1 -d.)
+base=$(echo $R1 | sed 's/_1$//')
+
+metaphlan ${trimdir}/${base}_trim_1.fastq.gz,${trimdir}/${base}_trim_2.fastq.gz \
+    --nproc ${SLURM_CPUS_PER_TASK} -o ${metaphlandir}/${base}.metagenome.txt</code></pre>
+<table>
+<tr><th>Element</th><th>What it does</th></tr>
+<tr><td><code>#SBATCH ...</code></td><td>Resources for <em>this</em> stage. Slurm reads these as comments, so the resources live with the code that needs them. Options passed on the <code>sbatch</code> command line (partition, job name, log paths) override or add to them.</td></tr>
+<tr><td><code>cat $0</code></td><td>Writes the exact script into the job's log, so every log records the code that produced it.</td></tr>
+<tr><td><code>${SLURM_CPUS_PER_TASK}</code></td><td>Pass this to the tool's thread option, so the script and the resource request can never disagree.</td></tr>
+<tr><td><code>${rawdir}</code>, <code>${trimdir}</code></td><td>Exported by config; never hard-code paths in modules.</td></tr>
+<tr><td><code>${SLURM_ARRAY_TASK_ID}</code></td><td>Which sample this task handles (next section).</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="arrays">6. Array jobs: one task per sample</h2>
+<p>Per-sample stages use a Slurm array: one submission, N tasks, each with its own <code>SLURM_ARRAY_TASK_ID</code>. The task picks its sample by position in the sorted file list:</p>
+<pre><code>file=$(ls "${rawdir}"/*_1.fastq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p)</code></pre>
+<p><code>sed -n 3p</code> prints only line 3, so task 3 gets the third file. The array size is set by the driver: <code>--array="1-${sample_number}%20"</code>.</p>
+
+<figure>
+<svg viewBox="0 0 680 270" role="img" aria-label="Array task IDs map to files by line number, with a concurrency limit">
+  <text class="tb" x="14" y="22">ls rawdir/*_1.fastq.gz</text>
+  <rect class="bx" x="14" y="32" width="190" height="30" rx="5"/><text class="mono tx" x="24" y="52">1  HV_1-1_1.fastq.gz</text>
+  <rect class="bx" x="14" y="68" width="190" height="30" rx="5"/><text class="mono tx" x="24" y="88">2  HV_2-1_1.fastq.gz</text>
+  <rect class="bx" x="14" y="104" width="190" height="30" rx="5"/><text class="mono tx" x="24" y="124">3  HV_3-1_1.fastq.gz</text>
+  <text class="tm" x="94" y="152">⋮</text>
+  <rect class="bx" x="14" y="162" width="190" height="30" rx="5"/><text class="mono tx" x="24" y="182">N  HV_N_1.fastq.gz</text>
+
+  <path class="ar" d="M204 47 H300"/>
+  <path class="ar" d="M204 83 H300"/>
+  <path class="ar" d="M204 119 H300"/>
+  <path class="ar" d="M204 177 H300"/>
+  <text class="mono tm" x="214" y="40">sed -n 1p</text>
+  <text class="mono tm" x="214" y="76">sed -n 2p</text>
+  <text class="mono tm" x="214" y="112">sed -n 3p</text>
+
+  <text class="tb" x="304" y="22">Array tasks</text>
+  <rect class="t" x="304" y="32" width="150" height="30" rx="5"/><text class="mono tx" x="314" y="52">task 1</text>
+  <rect class="t" x="304" y="68" width="150" height="30" rx="5"/><text class="mono tx" x="314" y="88">task 2</text>
+  <rect class="t" x="304" y="104" width="150" height="30" rx="5"/><text class="mono tx" x="314" y="124">task 3</text>
+  <rect class="t" x="304" y="162" width="150" height="30" rx="5"/><text class="mono tx" x="314" y="182">task N</text>
+
+  <rect class="a dash" x="484" y="32" width="182" height="160" rx="8"/>
+  <text class="tb" x="498" y="56">--array=1-N%20</text>
+  <text class="tm" x="498" y="78">1-N : one task per file</text>
+  <text class="tm" x="498" y="96">%20 : at most 20 run at once</text>
+  <text class="tm" x="498" y="124">The rest wait in the array</text>
+  <text class="tm" x="498" y="140">as one pending job record,</text>
+  <text class="tm" x="498" y="156">not N separate submissions.</text>
+
+  <rect class="c dash" x="14" y="210" width="652" height="48" rx="8"/>
+  <text class="tb" x="28" y="231">Watch the limit</text>
+  <text class="tm" x="28" y="248">Every array task counts towards MaxSubmitJobs: 100 samples is about 100 submissions.</text>
+</svg>
+<figcaption>Figure 3. Mapping array task IDs to samples, and throttling with %.</figcaption>
+</figure>
+<p>Tune the <code>%</code> limit to the stage: high for light tasks (FastQC, <code>%20</code>), low for heavy ones (Kraken2 with a memory-mapped database, <code>%4</code>) so you don't saturate a node or the shared file system.</p>
+
+<!-- ============================================================ -->
+<h2 id="driver">7. The driver job</h2>
+<h3>The problem it solves</h3>
+<p>The first version submitted every stage upfront, chained with <code>-d singleton</code>. That put dozens of jobs (plus every array task) in the queue at once, which hit the scheduler's limit on submitted jobs.</p>
+
+<figure>
+<svg viewBox="0 0 680 250" role="img" aria-label="Comparison of queue occupancy: upfront submission versus driver">
+  <text class="tb" x="14" y="22">Upfront submission, -d singleton</text>
+  <rect class="bx" x="14" y="32" width="300" height="26" rx="4"/><text class="mono tm" x="22" y="49">1-rename</text>
+  <rect class="bx" x="14" y="62" width="300" height="26" rx="4"/><text class="mono tm" x="22" y="79">2A  (array of N)</text>
+  <rect class="bx" x="14" y="92" width="300" height="26" rx="4"/><text class="mono tm" x="22" y="109">2B  (array of N)</text>
+  <rect class="bx" x="14" y="122" width="300" height="26" rx="4"/><text class="mono tm" x="22" y="139">3B  (array of N)</text>
+  <rect class="bx" x="14" y="152" width="300" height="26" rx="4"/><text class="mono tm" x="22" y="169">...  ~20 stages, all pending</text>
+  <text class="tm" x="14" y="200">All counted against MaxSubmitJobs from the start.</text>
+  <text class="tm" x="14" y="216">Hard to resume if a middle stage fails.</text>
+
+  <text class="tb" x="360" y="22">Driver, one stage at a time</text>
+  <rect class="t" x="360" y="32" width="300" height="26" rx="4"/><text class="mono tx" x="368" y="49">driver (running, 1 CPU)</text>
+  <rect class="a" x="360" y="62" width="300" height="26" rx="4"/><text class="mono tx" x="368" y="79">current stage (running)</text>
+  <text class="tm" x="360" y="116">Two records in the queue (plus the</text>
+  <text class="tm" x="360" y="132">tasks of the current array).</text>
+  <text class="tm" x="360" y="160">A failure stops the driver at that stage;</text>
+  <text class="tm" x="360" y="176">markers let a rerun carry on from there.</text>
+</svg>
+<figcaption>Figure 4. What each approach puts into the Slurm queue.</figcaption>
+</figure>
+
+<h3>Handing over to the driver</h3>
+<p>Near the top of <code>deploy.sh</code>, a launcher block submits the script to itself and exits:</p>
+<pre><code>if [[ -z "${PIPELINE_DRIVER}" &amp;&amp; "${foreground}" != "yes" ]]; then
+    driver_id=$(sbatch --parsable \
+        --job-name="${NAME}_driver" --partition=${driver_part} \
+        --time="${driver_time}" --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=1G \
+        --output="${log}/0_driver_%J.out" --error="${log}/0_driver_%J.err" \
+        --export=ALL,PIPELINE_DRIVER=1 \
+        --wrap "cd '$(pwd -P)' &amp;&amp; bash ${CMDLINE}")
+    echo "Driver job submitted: ${driver_id}"
+    exit 0
+fi</code></pre>
+<table>
+<tr><th>Piece</th><th>Meaning</th></tr>
+<tr><td><code>[[ -z "${PIPELINE_DRIVER}" ]]</code></td><td>True only when the flag is not set: this is the launcher. Inside the driver the flag is set, so the block is skipped and the stage list runs. This single variable is what lets one file play both roles.</td></tr>
+<tr><td><code>--parsable</code></td><td>Makes <code>sbatch</code> print just the job ID, which <code>$(...)</code> captures.</td></tr>
+<tr><td><code>--export=ALL,PIPELINE_DRIVER=1</code></td><td>Passes the whole environment <em>and</em> adds the flag.</td></tr>
+<tr><td><code>--wrap "..."</code></td><td>Wraps a one-line command into a throwaway job script, so there is no separate file.</td></tr>
+<tr><td><code>cd '$(pwd -P)'</code></td><td>Expanded now, on the login node, into the absolute launch directory, so the driver starts in the same place (the relative <code>source config/arguments</code> needs it).</td></tr>
+<tr><td><code>bash ${CMDLINE}</code></td><td>Replays the original command line, captured in section 3.1.</td></tr>
+<tr><td><code>%J</code></td><td>Slurm fills in the job ID in the log file names.</td></tr>
+</table>
+<p>The <code>-F</code>/<code>--foreground</code> option skips the hand-over and runs the stages in the current shell, useful inside <code>tmux</code> or for debugging.</p>
+
+<div class="warn"><strong>Walltime.</strong> The driver lives as long as the whole pipeline, so give it the longest-allowed partition (<code>epyc_long</code>, 7 days here). If it times out, the stage in flight keeps running, and a rerun resumes from the done markers.</div>
+
+<!-- ============================================================ -->
+<h2 id="run">8. The run() function and done markers</h2>
+<pre><code># Usage: run STEP_NAME  &lt;sbatch options...&gt;  &lt;module script&gt;
+run() {
+    step_name="$1"       # first argument: a label for this stage
+    shift                # remove it, leaving only the sbatch arguments
+
+    marker="${workdir}/.done_${step_name}"
+
+    # 1. Already finished in an earlier run? Then skip it.
+    if [ -e "$marker" ]; then
+        echo "$(date '+%F %T') SKIP   ${step_name} (done marker found)"
+        return 0
+    fi
+
+    # 2. Submit the job and wait until it finishes.
+    echo "$(date '+%F %T') SUBMIT ${step_name}"
+    sbatch --wait "$@"
+    exit_code=$?
+
+    # 3. Success: leave a marker. Failure: stop everything.
+    if [ "$exit_code" -eq 0 ]; then
+        touch "$marker"
+        echo "$(date '+%F %T') DONE   ${step_name}"
+    else
+        echo "$(date '+%F %T') FAILED ${step_name} - stopping the pipeline" &gt;&amp;2
+        exit 1
+    fi
+}</code></pre>
+
+<figure>
+<svg viewBox="0 0 680 330" role="img" aria-label="Flow chart of the run function">
+  <rect class="b" x="14" y="130" width="130" height="44" rx="8"/>
+  <text class="tb" x="26" y="150">run STEP ...</text>
+  <text class="tm" x="26" y="166">called by deploy.sh</text>
+  <path class="ar" d="M144 152 H190"/>
+  <path class="bx" d="M190 152 L255 112 L320 152 L255 192 Z"/>
+  <text class="tx" x="214" y="150">marker</text>
+  <text class="tx" x="214" y="166">exists?</text>
+  <!-- yes -->
+  <path class="ar" d="M255 112 V60 H370"/>
+  <text class="tm" x="262" y="90">yes</text>
+  <rect class="t" x="372" y="40" width="150" height="40" rx="8"/>
+  <text class="tb" x="384" y="58">SKIP</text>
+  <text class="tm" x="384" y="73">return 0, next stage</text>
+  <!-- no -->
+  <path class="ar" d="M320 152 H372"/>
+  <text class="tm" x="334" y="144">no</text>
+  <rect class="a" x="374" y="128" width="170" height="48" rx="8"/>
+  <text class="mono tb" x="386" y="148">sbatch --wait</text>
+  <text class="tm" x="386" y="166">blocks until job ends</text>
+  <path class="ar" d="M459 176 V214"/>
+  <path class="bx" d="M395 244 L459 214 L523 244 L459 274 Z"/>
+  <text class="tx" x="425" y="242">exit</text>
+  <text class="tx" x="425" y="258">code 0?</text>
+  <path class="ar" d="M395 244 H300"/>
+  <text class="tm" x="340" y="236">yes</text>
+  <rect class="t" x="150" y="224" width="148" height="40" rx="8"/>
+  <text class="tb" x="162" y="242">touch marker</text>
+  <text class="tm" x="162" y="257">DONE, next stage</text>
+  <path class="ar" d="M523 244 H560"/>
+  <text class="tm" x="530" y="236">no</text>
+  <rect class="c" x="562" y="224" width="104" height="40" rx="8"/>
+  <text class="tb" x="574" y="242">FAILED</text>
+  <text class="tm" x="574" y="257">exit 1, stop</text>
+</svg>
+<figcaption>Figure 5. The three outcomes of run(): skip, done, failed.</figcaption>
+</figure>
+
+<h3>Why <code>sbatch --wait</code> works</h3>
+<ul>
+  <li>It blocks until the job ends, then exits with the job's status. Zero means success; non-zero means failure.</li>
+  <li>For an array it waits for <em>all</em> tasks and is non-zero if any task failed.</li>
+  <li>It therefore replaces dependency flags: the driver itself enforces the order.</li>
+</ul>
+
+<h3>Resuming</h3>
+<p>The markers live in <code>${workdir}</code> as empty files. Fix the problem, run the same <code>deploy.sh</code> command again, and finished stages print <code>SKIP</code>. To force a stage to rerun, delete its marker and the markers of every stage after it:</p>
+<pre><code>rm work/.done_3B-kraken_array work/.done_3C-kraken_merge ...</code></pre>
+<div class="note">A marker records "Slurm reported success", not "the output is right". If you change a stage's code or inputs, remove its marker too.</div>
+
+<!-- ============================================================ -->
+<h2 id="parallel">9. Running stages in parallel, then gating</h2>
+<p>Quality control and the database downloads don't depend on each other, so they run side by side. The expensive searches (Kraken2, MetaPhlAn) must wait for all of them. Bash does this with background subshells and <code>wait</code>:</p>
+<pre><code>prep_pids=()
+
+( run 2A-fastqc_array ... ; run 2B-fastp_array ... ; run 2C-fastqc-trim ... ) &amp;
+prep_pids+=($!)
+
+run 3A-krakendownload ... &amp;
+prep_pids+=($!)
+
+run 5A-metaphlandb_download ... &amp;
+prep_pids+=($!)
+
+prep_failed=0
+for pid in "${prep_pids[@]}"; do
+    wait "$pid" || prep_failed=1
+done
+[[ "$prep_failed" -ne 0 ]] &amp;&amp; { echo "prep failed - not starting searches" &gt;&amp;2; exit 1; }</code></pre>
+<figure>
+<svg viewBox="0 0 680 280" role="img" aria-label="Three parallel branches join at a barrier before the searches start">
+  <rect class="b" x="14" y="30" width="60" height="34" rx="6"/><text class="tx" x="28" y="52">2A</text>
+  <path class="ar" d="M74 47 H100"/>
+  <rect class="b" x="102" y="30" width="60" height="34" rx="6"/><text class="tx" x="116" y="52">2B</text>
+  <path class="ar" d="M162 47 H188"/>
+  <rect class="b" x="190" y="30" width="60" height="34" rx="6"/><text class="tx" x="204" y="52">2C</text>
+  <text class="tm" x="260" y="52">QC and trimming (sequential branch)</text>
+
+  <rect class="t" x="14" y="100" width="236" height="34" rx="6"/><text class="tx" x="28" y="122">3A  Kraken2 database (link or download)</text>
+  <rect class="t" x="14" y="170" width="236" height="34" rx="6"/><text class="tx" x="28" y="192">5A  MetaPhlAn database (link or install)</text>
+
+  <path class="ln" d="M250 47 H330 V120"/>
+  <path class="ln" d="M250 117 H330"/>
+  <path class="ln" d="M250 187 H330 V150"/>
+  <rect class="a" x="326" y="100" width="22" height="100" rx="4" transform="translate(0 -10)"/>
+  <text class="tb" x="362" y="116">wait for ALL branches</text>
+  <text class="tm" x="362" y="134">for pid in ...; do wait "$pid" || failed=1</text>
+  <path class="ar" d="M348 140 H420 V220"/>
+  <rect class="bx" x="420" y="222" width="110" height="34" rx="6"/><text class="tx" x="432" y="244">3B  Kraken2</text>
+  <rect class="bx" x="548" y="222" width="116" height="34" rx="6"/><text class="tx" x="560" y="244">5B  MetaPhlAn</text>
+  <path class="ln" d="M420 220 H606"/>
+  <text class="tm" x="14" y="262">Any branch failing sets failed=1, so neither search starts. Branches that did finish keep their markers.</text>
+</svg>
+<figcaption>Figure 6. Parallel preparation, then a barrier.</figcaption>
+</figure>
+<ul>
+  <li><code>( ... ) &amp;</code> runs a group of commands as one background job; <code>$!</code> is its process ID.</li>
+  <li><code>exit 1</code> inside <code>run</code> only ends that background branch. The <code>wait ... || failed=1</code> loop is what notices and stops the whole pipeline.</li>
+  <li>Every branch needs a sensible <code>wait</code>: unwaited background jobs would let the driver run on regardless.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="db">10. Shared databases: link, don't copy</h2>
+<p>Large reference databases (Kraken2 pluspf is about 116 GB) live once in a shared library, with one sub-folder per version named exactly as the <code>-k</code> and <code>-m</code> options:</p>
+<pre><code>/mnt/ecotox/GROUP-smbpk/resources/
+├── kraken/
+│   └── k2_pluspf_20250402/      # hash.k2d, opts.k2d, taxo.k2d, ...
+└── metaphlan/
+    └── mpa_vJan25_CHOCOPhlAnSGB_202503/</code></pre>
+<p>Steps 3A and 5A check that folder first and link if it's present, otherwise download:</p>
+<pre><code>shared_db="${resources_dir}/kraken/${krakendb}"
+
+if [[ -s "${shared_db}/hash.k2d" &amp;&amp; -s "${shared_db}/opts.k2d" &amp;&amp; -s "${shared_db}/taxo.k2d" ]]; then
+    for item in "${shared_db}"/*; do
+        ln -sfn "${item}" "${krakendbdir}/$(basename "${item}")"
+    done
+else
+    wget -P ${krakendbdir}/ https://genome-idx.s3.amazonaws.com/kraken/${krakendb}.tar.gz
+    tar -xvzf ${krakendbdir}/${krakendb}.tar.gz -C ${krakendbdir}/
+    rm ${krakendbdir}/${krakendb}.tar.gz
+fi</code></pre>
+<figure>
+<svg viewBox="0 0 680 190" role="img" aria-label="Database resolution: link if in shared library, else download">
+  <rect class="p" x="14" y="68" width="120" height="44" rx="8"/>
+  <text class="tb" x="26" y="88">-k name</text>
+  <text class="tm" x="26" y="104">user's choice</text>
+  <path class="ar" d="M134 90 H170"/>
+  <path class="bx" d="M170 90 L240 52 L310 90 L240 128 Z"/>
+  <text class="tx" x="204" y="88">in shared</text>
+  <text class="tx" x="204" y="104">library?</text>
+  <path class="ar" d="M240 52 V26 H372"/>
+  <text class="tm" x="246" y="44">yes</text>
+  <rect class="t" x="374" y="8" width="190" height="40" rx="8"/>
+  <text class="tb" x="386" y="26">ln -sfn each item</text>
+  <text class="tm" x="386" y="41">no copy, no download</text>
+  <path class="ar" d="M240 128 V160 H372"/>
+  <text class="tm" x="246" y="148">no</text>
+  <rect class="a" x="374" y="142" width="190" height="40" rx="8"/>
+  <text class="tb" x="386" y="160">wget + tar</text>
+  <text class="tm" x="386" y="175">into work/…/db</text>
+  <path class="ar" d="M564 28 H600 V86"/>
+  <path class="ar" d="M564 162 H600 V100"/>
+  <text class="tm" x="606" y="98">3B / 4A use</text>
+  <text class="mono tm" x="606" y="113">work/…/db</text>
+</svg>
+<figcaption>Figure 7. The same work folder results either way, so later stages need no changes.</figcaption>
+</figure>
+<table>
+<tr><th>Choice</th><th>Why</th></tr>
+<tr><td>Symlink, not copy</td><td>No extra 100 GB per run, instant, and concurrent jobs on one node share the same page cache when memory-mapped. Keep the library read-only.</td></tr>
+<tr><td>Link each item (loop), not the folder</td><td>The work folder stays an ordinary directory, and re-running is safe: <code>ln -sfn</code> replaces an existing link instead of creating one inside the target.</td></tr>
+<tr><td><code>-s</code> checks on key files</td><td>Tests that the file exists and is non-empty, so a half-created folder doesn't count as "found".</td></tr>
+<tr><td>Trade-off</td><td>On a network mount, the first read of a memory-mapped database is slower while the cache fills. If that hurts, copy to node-local scratch instead.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="log">11. Recording the command line</h2>
+<p>Each launch appends to <code>work/0-log/0_execution_commandline.txt</code>, so the log shows exactly how a result was produced:</p>
+<pre><code>if [[ -z "${PIPELINE_DRIVER}" ]]; then {
+    echo "# $(date '+%Y-%m-%d %H:%M:%S') user=${USER} host=$(hostname)"
+    echo "# cwd: $(pwd -P)"
+    echo "${CMDLINE}"
+    echo ""
+} &gt;&gt; "${log}/0_execution_commandline.txt"; fi</code></pre>
+<p>It is skipped inside the driver (which replays the same command) so each launch is logged once. <code>&gt;&gt;</code> appends, so repeated deploys build a history. Pair this with the module logs (which contain each script via <code>cat $0</code>) and you have the full recipe for every run.</p>
+
+<!-- ============================================================ -->
+<h2 id="monitor">12. Monitoring, cancelling, resuming</h2>
+<table>
+<tr><th>Task</th><th>Command</th></tr>
+<tr><td>Start a run</td><td><code>./deploy.sh -n run1 -p epyc_bigram</code></td></tr>
+<tr><td>Follow progress</td><td><code>tail -f work/0-log/0_driver_&lt;jobid&gt;.out</code> (lines read SUBMIT / DONE / SKIP / FAILED)</td></tr>
+<tr><td>Check errors from the driver</td><td><code>cat work/0-log/0_driver_&lt;jobid&gt;.err</code></td></tr>
+<tr><td>See what is queued</td><td><code>squeue -u $USER</code> or <code>squeue -u $USER -n run1</code></td></tr>
+<tr><td>Look at a stage's logs</td><td><code>work/0-log/&lt;stage&gt;_&lt;jobid&gt;.out</code> and <code>.err</code></td></tr>
+<tr><td>Cancel everything</td><td><code>scancel &lt;driver_id&gt;</code>, then <code>scancel -u $USER -n run1</code> for the running stage</td></tr>
+<tr><td>Why did a job die?</td><td><code>sacct -j &lt;jobid&gt; --format=JobID,State,ExitCode,MaxRSS,Elapsed</code></td></tr>
+<tr><td>Resume after a failure</td><td>Fix the cause, then run the same <code>deploy.sh</code> command again.</td></tr>
+<tr><td>Force a stage to rerun</td><td>Delete its <code>work/.done_&lt;stage&gt;</code> (and later stages' markers).</td></tr>
+</table>
+<p>Cancelling the driver does <em>not</em> stop the stage it submitted. Cancel that too, or let it finish and the next run will skip it if it completed.</p>
+
+<!-- ============================================================ -->
+<h2 id="pitfalls">13. Pitfalls checklist</h2>
+<ul>
+  <li><strong>Windows line endings.</strong> A script saved with CRLF breaks bash loops (<code>do\r</code>) and corrupts URLs. Keep shell scripts LF. Set <code>* text=auto eol=lf</code> for <code>*.sh</code> in <code>.gitattributes</code> if you edit on Windows.</li>
+  <li><strong>Un-exported variables.</strong> If a module reports an empty path, the variable was set but not exported.</li>
+  <li><strong>Run name uniqueness.</strong> Done markers live in <code>${workdir}</code>; use a new <code>-w</code> or <code>-n</code> for a fresh run, or you'll skip stages you meant to repeat.</li>
+  <li><strong>Race on shared state.</strong> Count samples only <em>after</em> the stage that creates them has finished (<code>run</code> waits, so this is safe in the driver).</li>
+  <li><strong>Parallel array tasks and installs.</strong> Never install or write shared files inside an array task: all tasks run at once. Do it once in a separate non-array stage (the MetaPhlAn index in 5A).</li>
+  <li><strong>Tools that refuse to overwrite.</strong> Some (MetaPhlAn <code>--mapout</code>) fail if the output exists. Add <code>rm -f</code> before the command so reruns work.</li>
+  <li><strong>Hidden defaults.</strong> Read option names carefully: in Bracken, <code>-t</code> is a minimum-read threshold, not threads.</li>
+  <li><strong>Queue limits.</strong> Check <code>MaxSubmitJobs</code> for your QOS. Arrays count per task, so very large sample sets may need submission in chunks.</li>
+  <li><strong>Time limits.</strong> Stages with no <code>#SBATCH --time</code> get the partition default, which may be too short for slow steps.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="template">14. Starter skeleton</h2>
+<p>The smallest version of the pattern. Copy it, then add stages. It has the driver hand-over, the <code>run</code> function, one single job and one array job.</p>
+<h3>deploy.sh</h3>
+<pre><code>#!/bin/bash
+source config/arguments      # options, defaults, exports (captures CMDLINE first)
+source config/folders        # creates ${workdir}, ${log}, ${rawdir}; exports them
+
+# ---- hand over to a driver job ----
+if [[ -z "${PIPELINE_DRIVER}" &amp;&amp; "${foreground}" != "yes" ]]; then
+    driver_id=$(sbatch --parsable --job-name="${NAME}_driver" --partition=${driver_part} \
+        --time="${driver_time}" --cpus-per-task=1 --mem=1G \
+        --output="${log}/0_driver_%J.out" --error="${log}/0_driver_%J.err" \
+        --export=ALL,PIPELINE_DRIVER=1 \
+        --wrap "cd '$(pwd -P)' &amp;&amp; bash ${CMDLINE}")
+    echo "Driver job submitted: ${driver_id}"
+    exit 0
+fi
+unset SLURM_MEM_PER_NODE SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU
+
+run() {
+    step_name="$1"; shift
+    marker="${workdir}/.done_${step_name}"
+    [ -e "$marker" ] &amp;&amp; { echo "SKIP ${step_name}"; return 0; }
+    echo "SUBMIT ${step_name}"
+    sbatch --wait "$@"
+    if [ $? -eq 0 ]; then touch "$marker"; echo "DONE ${step_name}"
+    else echo "FAILED ${step_name}" &gt;&amp;2; exit 1; fi
+}
+
+# ---- stages ----
+run 1-prepare --job-name=${NAME} --partition=${PART} \
+    --output="${log}/1-prepare_%J.out" --error="${log}/1-prepare_%J.err" \
+    "${moduledir}/1-prepare.sh"
+
+sample_number=$(find "${rawdir}" -maxdepth 1 -name "*_1.fastq.gz" | wc -l)
+
+run 2-analyse --array="1-${sample_number}%20" --job-name=${NAME} --partition=${PART} \
+    --output="${log}/2-analyse_%J.out" --error="${log}/2-analyse_%J.err" \
+    "${moduledir}/2-analyse_array.sh"</code></pre>
+<h3>modules/2-analyse_array.sh</h3>
+<pre><code>#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32000
+
+cat $0
+file=$(ls "${rawdir}"/*_1.fastq.gz | sed -n ${SLURM_ARRAY_TASK_ID}p)
+base=$(basename "$file" _1.fastq.gz)
+
+mytool --threads ${SLURM_CPUS_PER_TASK} -i "$file" -o "${outdir}/${base}.result.txt"</code></pre>
+<p>Remember to <code>export</code> every path in <code>config/folders</code> that a module uses, and to export <code>moduledir</code>, <code>log</code>, <code>workdir</code>, <code>rawdir</code> and <code>outdir</code>.</p>
+
+</main>
+</body>
+</html>
